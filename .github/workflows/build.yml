@@ -1,0 +1,25 @@
+# Builds the routing tiles from the latest OpenStreetMap extract and publishes them as a release.
+name: build
+on:
+  schedule:
+    - cron: "0 6 3 * *"   # the 3rd of each month, after Geofabrik's daily extract
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make room
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Build
+        run: python3 build.py "$RUNNER_TEMP/work" "$RUNNER_TEMP/out"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          build=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['build'])" "$RUNNER_TEMP/out/manifest.json")
+          if gh release view "$build" >/dev/null 2>&1; then echo "release $build exists"; exit 0; fi
+          gh release create "$build" "$RUNNER_TEMP"/out/* --title "$build" --notes "OpenStreetMap data of $build. © OpenStreetMap contributors, ODbL 1.0."
