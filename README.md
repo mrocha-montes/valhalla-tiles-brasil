@@ -10,8 +10,9 @@ Each release is tagged with the day of the OpenStreetMap data and has:
 - `br-xx.tar.gz`: the Valhalla tiles (graph levels 0 to 2, no elevation) that touch the state's
   box. All states of a release come from one build and can be unpacked into one folder together.
 - `places-br-xx.sqlite.gz`: the state's named places (shops, fuel stations, workshops, airports...),
-  for searching with no network: name, the names it also goes by, kind, position and size, one
-  SQLite table described in `places.py`. Placed in a state by its outline (`outlines.json`).
+  for searching with no network: name, the names it also goes by, kind, position and size; and
+  the speed cameras OpenStreetMap has (`highway=speed_camera`), with the limit they enforce. Two
+  SQLite tables described in `places.py`. Placed in a state by its outline (`outlines.json`).
   Listed under `places` in the manifest.
 
 Built by `build.py` (the places by `places.py`, with osmium-tool in Debian's image) with Valhalla 3.9.1 (`ghcr.io/valhalla/valhalla-scripted`, pinned by digest) from
