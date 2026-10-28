@@ -12,10 +12,12 @@ MapRegions.kt), so neighbours share some tiles; the app unpacks them into one fo
 Steps, each skipped when its output is already there:
   1. download Geofabrik's Brazil extract (about 2 GB);
   2. build the tiles with Valhalla's own image, pinned (about 3 GB of tiles);
-  3. write <out>/br-xx.tar.gz for each state and <out>/manifest.json.
+  3. write <out>/br-xx.tar.gz for each state;
+  4. write <out>/places-br-xx.sqlite.gz, the named places searched with no network (places.py);
+  5. write <out>/manifest.json, which names both.
 
 Needs Python 3 and Docker. Usage: build.py <work dir> <out dir>
-Runs the same on a computer and in the monthly job (.github/workflows/build.yml).
+Runs the same on a computer and in the data repository's monthly job (repository/.github/workflows/build.yml).
 """
 
 import datetime
@@ -28,6 +30,8 @@ import subprocess
 import sys
 import tarfile
 import urllib.request
+
+import places
 
 EXTRACT = "https://download.geofabrik.de/south-america/brazil-latest.osm.pbf"
 # Valhalla 3.9.1, the version valhalla-mobile 0.6.4 follows. Pinned: tiles must suit the engine on the phone.
@@ -91,7 +95,7 @@ def cut(tiles, out, data_day):
             "tiles": len(chosen), "unpacked": sum(t.stat().st_size for t in chosen),
         }
         print(sid, len(chosen), "tiles", manifest["states"][sid]["bytes"] // 1_000_000, "MB", flush=True)
-    (out / "manifest.json").write_text(json.dumps(manifest, indent=1, ensure_ascii=False))
+    return manifest
 
 
 def main():
@@ -100,7 +104,9 @@ def main():
     work, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
     data_day = download(work)
     tiles = build(work)
-    cut(tiles, out, data_day)
+    manifest = cut(tiles, out, data_day)
+    manifest["places"] = places.build(work / "custom_files" / "brazil-latest.osm.pbf", out)
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=1, ensure_ascii=False))
 
 
 if __name__ == "__main__":
