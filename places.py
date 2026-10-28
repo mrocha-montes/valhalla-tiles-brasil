@@ -23,6 +23,12 @@ A file holds one table:
     lat, lon micro-degrees
     locality, city  from its addr:suburb and addr:city tags, when it has them (empty otherwise)
 
+and the speed cameras OpenStreetMap has in the state (nodes tagged highway=speed_camera):
+  cameras(lat, lon, kmh)
+    kmh      the limit it enforces, from its maxspeed tag; 0 when it has none
+Their direction tag is left out: it points the wrong way on most highways, many mappers tagging
+where the camera looks (docs/research/speed-cameras.md).
+
 Usage: places.py <extract.osm.pbf> <out dir> [state id ...]
 Writes <out>/places-br-xx.sqlite.gz and returns, for build.py's manifest, what it wrote.
 """
@@ -42,6 +48,8 @@ HERE = pathlib.Path(__file__).resolve().parent
 OUTLINES = HERE / "outlines.json"
 STATES = HERE / "states.json"
 IMAGE = "debian:bookworm-slim"
+# osmium is held to this, so that a full run cannot take the machine's memory (a laptop froze, 2026-10-28).
+MEMORY = "3g"
 
 # The tags that make something a place to ride to, in the order the kind is taken from.
 KEYS = ["amenity", "shop", "tourism", "aeroway", "railway", "public_transport", "leisure", "healthcare", "office", "craft", "historic"]
@@ -109,8 +117,30 @@ def extract(pbf):
         "osmium export -O -f geojsonseq -x print_record_separator=false --geometry-types=point,linestring,polygon "
         "-o /data/places.geojsonseq /data/places.osm.pbf"
     )
-    subprocess.run(["docker", "run", "--rm", "-v", f"{folder}:/data", IMAGE, "sh", "-c", script], check=True)
+    subprocess.run(["docker", "run", "--rm", "--memory", MEMORY, "-v", f"{folder}:/data", IMAGE, "sh", "-c", script], check=True)
     return folder / "places.geojsonseq"
+
+
+def extract_cameras(pbf):
+    """The speed cameras of the extract, as GeoJSON points, one a line; kept from an earlier run when newer than the extract."""
+    folder = pbf.parent.resolve()
+    done = folder / "cameras.geojsonseq"
+    if done.exists() and done.stat().st_mtime > pbf.stat().st_mtime:
+        return done
+    script = (
+        "apt-get -qq update >/dev/null && apt-get -qq install -y osmium-tool >/dev/null && "
+        f"osmium tags-filter -O -R -o /data/cameras.osm.pbf /data/{pbf.name} n/highway=speed_camera && "
+        "osmium export -O -f geojsonseq -x print_record_separator=false --geometry-types=point "
+        "-o /data/cameras.geojsonseq /data/cameras.osm.pbf"
+    )
+    subprocess.run(["docker", "run", "--rm", "--memory", MEMORY, "-v", f"{folder}:/data", IMAGE, "sh", "-c", script], check=True)
+    return done
+
+
+def speed_of(tags):
+    """A camera's limit in km/h from its maxspeed tag ("60", "60 km/h"); 0 when none can be read."""
+    match = re.match(r"\s*(\d{2,3})", tags.get("maxspeed", ""))
+    return int(match.group(1)) if match and 10 <= int(match.group(1)) <= 150 else 0
 
 
 def middle(geometry):
@@ -171,6 +201,14 @@ def build(pbf, out, only=None):
             sid = state_of(lat, lon, states, rings)
             if sid:
                 found[sid].append((name, searched(tags), kind, round(lat * 1e6), round(lon * 1e6), extent(feature["geometry"]), tags.get("addr:suburb", ""), tags.get("addr:city", "")))
+    cameras = {sid: [] for sid in states}
+    with open(extract_cameras(pbf), encoding="utf-8") as lines:
+        for line in lines:
+            feature = json.loads(line)
+            lat, lon = middle(feature["geometry"])
+            sid = state_of(lat, lon, states, rings)
+            if sid:
+                cameras[sid].append((round(lat * 1e6), round(lon * 1e6), speed_of(feature["properties"])))
     out.mkdir(parents=True, exist_ok=True)
     written = {}
     for sid, rows in found.items():
@@ -182,6 +220,8 @@ def build(pbf, out, only=None):
         db = sqlite3.connect(db_path)
         db.execute("CREATE TABLE places(name TEXT, folded TEXT, kind TEXT, lat INTEGER, lon INTEGER, extent INTEGER, locality TEXT, city TEXT)")
         db.executemany("INSERT INTO places VALUES (?,?,?,?,?,?,?,?)", sorted(rows, key=lambda r: r[1]))
+        db.execute("CREATE TABLE cameras(lat INTEGER, lon INTEGER, kmh INTEGER)")
+        db.executemany("INSERT INTO cameras VALUES (?,?,?)", cameras[sid])
         db.commit()
         db.execute("VACUUM")
         db.close()
@@ -190,10 +230,10 @@ def build(pbf, out, only=None):
             target.write(source.read())
         written[sid] = {
             "file": name, "bytes": (out / name).stat().st_size, "unpacked": db_path.stat().st_size,
-            "sha256": hashlib.sha256((out / name).read_bytes()).hexdigest(), "places": len(rows),
+            "sha256": hashlib.sha256((out / name).read_bytes()).hexdigest(), "places": len(rows), "cameras": len(cameras[sid]),
         }
         db_path.unlink()
-        print(sid, len(rows), "places", written[sid]["bytes"] // 1000, "kB", flush=True)
+        print(sid, len(rows), "places", len(cameras[sid]), "cameras", written[sid]["bytes"] // 1000, "kB", flush=True)
     return written
 
 
